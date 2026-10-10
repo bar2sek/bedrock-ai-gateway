@@ -1,0 +1,35 @@
+{
+  "name": "bedrock-ai-gateway",
+  "version": "0.1.0",
+  "description": "Governed AI gateway on AWS: API Gateway + Lambda (TypeScript) doing RAG over a Bedrock Knowledge Base with Guardrails, deployed with AWS CDK",
+  "private": true,
+  "scripts": {
+    "typecheck": "tsc",
+    "test": "jest",
+    "synth": "cdk synth",
+    "diff": "cdk diff",
+    "deploy": "cdk deploy",
+    "cdk": "cdk"
+  },
+  "devDependencies": {
+    "@swc/core": "^1.15.0",
+    "@swc/jest": "^0.2.39",
+    "@types/aws-lambda": "^8.10.164",
+    "@types/jest": "^30",
+    "@types/node": "^24.10.1",
+    "aws-cdk": "2.1145.0",
+    "aws-sdk-client-mock": "^4.1.0",
+    "esbuild": "^0.28.2",
+    "jest": "^30",
+    "tsx": "^4.23.0",
+    "typescript": "~7.0.2"
+  },
+  "dependencies": {
+    "@aws-lambda-powertools/logger": "^2.36.0",
+    "@aws-lambda-powertools/metrics": "^2.36.0",
+    "@aws-sdk/client-bedrock-agent-runtime": "^3.1149.0",
+    "@aws-sdk/client-bedrock-runtime": "^3.1149.0",
+    "aws-cdk-lib": "^2.272.0",
+    "constructs": "^10.5.0"
+  }
+}

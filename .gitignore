@@ -1,0 +1,22 @@
+# TypeScript output (the app runs from source via tsx; Lambda code is bundled by esbuild)
+*.js
+!jest.config.js
+*.d.ts
+node_modules
+
+# CDK asset staging and synthesized output (templates contain the account ID)
+.cdk.staging
+cdk.out
+
+# Secrets and local configuration
+.env*
+*.pem
+*.key
+*.tfvars
+
+# OS / editor noise
+.DS_Store
+._*
+.vscode/
+.idea/
+coverage/
