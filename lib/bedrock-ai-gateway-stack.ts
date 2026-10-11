@@ -30,6 +30,7 @@ export class BedrockAiGatewayStack extends cdk.Stack {
     // esbuild at synth time, so only the code the handler imports is shipped.
     const chatFunction = new nodejs.NodejsFunction(this, 'ChatFunction', {
       entry: path.join(__dirname, '..', 'src', 'chat', 'handler.ts'),
+      description: 'RAG chat: Bedrock Knowledge Base retrieval + Converse with Guardrails',
       runtime: lambda.Runtime.NODEJS_24_X,
       architecture: lambda.Architecture.ARM_64,
       memorySize: 512,
