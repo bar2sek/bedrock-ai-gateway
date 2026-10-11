@@ -84,6 +84,33 @@ npx cdk diff           # compare against what is deployed
 npx cdk deploy         # create or update the stack
 ```
 
+## Delivery pipeline
+
+Every change reaches AWS through a pull request. Nobody, the owner included, can push to `main` directly. The workflow is [`.github/workflows/cdk.yml`](.github/workflows/cdk.yml):
+
+```mermaid
+graph LR
+  PR[Pull request] --> V1[verify<br/>typecheck · tests · synth · cdk diff]
+  V1 -->|required check| M[Merge to main]
+  M --> V2[verify]
+  V2 --> A{production<br/>approval}
+  A -->|approved| D[deploy<br/>cdk deploy]
+```
+
+| Control | Where it is enforced |
+|---|---|
+| No stored AWS credentials | OIDC: each job exchanges a short-lived GitHub token for a 1-hour AWS session |
+| Pull requests are read-only | The PR job's role may assume only the CDK **lookup** role, so `cdk diff --method=template` works and deployment does not |
+| Only `main` can deploy | The deploy role trusts only the `production` environment, which accepts only protected branches |
+| Human approval before every deploy | `production` has a required reviewer; admins cannot bypass it |
+| Nothing merges untested | Branch protection requires the `verify` check, with the branch up to date with `main` |
+| No account ID in public logs | Role ARNs are masked secrets; the diff summary is redacted |
+
+The IAM roles and GitHub settings behind these controls are Terraform-managed in a separate bootstrap layer, applied by a person, so the pipeline can't change its own permissions.
+
+> [!WARNING]
+> The CDK bootstrap's CloudFormation execution role is `AdministratorAccess` by default. The controls above decide *who* can deploy. Narrowing *what* a deployment can create is the next step: a scoped execution policy, plus a permissions boundary on every role the stack creates.
+
 ## Try it
 
 ```bash
@@ -112,7 +139,10 @@ Cases worth trying:
 
 - [x] **M1 — Core path:** API Gateway → Lambda → Retrieve + Converse with Guardrail; tests
 - [ ] **M2 — Observability:** CloudWatch metrics (tokens, latency, guardrail interventions), per-consumer usage log in DynamoDB, dashboard and alarms
-- [ ] **M3 — Delivery:** GitHub Actions (typecheck, test, synth), cdk-nag security rules, OIDC deploy
+- [ ] **M3 — Delivery:**
+  - [x] GitHub Actions: PR verify + `cdk diff`, gated OIDC deploy
+  - [ ] cdk-nag security rules
+  - [ ] Bootstrap as code with a scoped execution policy and a permissions boundary
 - [ ] **M4 — Platform contract:** read Knowledge Base and Guardrail IDs from SSM Parameter Store, published by the Terraform side
 - [ ] **Later:** streaming responses, multi-turn sessions, an evaluation set with LLM-as-judge scoring
 

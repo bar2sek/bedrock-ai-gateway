@@ -1,0 +1,127 @@
+name: CDK CI/CD
+
+# Pull request -> verify: typecheck, tests, synth, and a read-only `cdk diff`.
+# Merge to main -> verify again, then deploy from the protected `production`
+# environment after reviewer approval.
+#
+# AWS access is OIDC only (no stored keys). Each job assumes a role that can
+# only assume specific CDK bootstrap roles:
+#   AWS_DIFF_ROLE_ARN   (repository secret)  -> lookup role (read-only)
+#   AWS_DEPLOY_ROLE_ARN (production secret)  -> deploy + file-publishing roles
+# Both roles and these GitHub settings are managed in Terraform
+# (personal-technology: bootstrap/aws and bootstrap/github).
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+# Least privilege by default; jobs that need an OIDC token opt in.
+permissions:
+  contents: read
+
+env:
+  AWS_REGION: us-east-2
+  NODE_VERSION: "24"
+
+jobs:
+  verify:
+    # Must stay `verify`: branch protection requires a check with this name.
+    name: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # request the OIDC token exchanged for AWS credentials
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies (exact versions from package-lock.json)
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit, handler and CDK assertion tests
+        run: npm test
+
+      # The diff role trusts only pull_request tokens, so AWS steps are PR-only.
+      # On push, `cdk deploy` prints the changes it applies.
+      - name: Configure AWS credentials (read-only diff role)
+        if: github.event_name == 'pull_request'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DIFF_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          mask-aws-account-id: true
+
+      - name: Synthesize CloudFormation
+        if: github.event_name == 'pull_request'
+        run: npx cdk synth --quiet
+
+      # --method=template compares against the deployed template through the
+      # read-only lookup role. The default method creates a change set, which
+      # needs the deploy role.
+      - name: Diff against deployed stack
+        if: github.event_name == 'pull_request'
+        # Explicit bash adds -o pipefail, so a failing `cdk diff` fails the step
+        # instead of being hidden by `tee`.
+        shell: bash
+        run: |
+          npx cdk diff --method=template 2>&1 | tee cdk-diff.txt
+          # Step summaries are not masked like logs are, so redact the account ID
+          # before publishing the diff on the run page.
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          {
+            echo '## `cdk diff` against production'
+            echo '```'
+            sed "s/${ACCOUNT_ID}/<account-id>/g" cdk-diff.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  deploy:
+    name: deploy
+    needs: verify
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    # Required reviewer approval happens here, before any step runs. Only jobs
+    # in this environment receive an OIDC subject the deploy role trusts.
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    # Never run two deployments at once; queue instead of cancelling one midway.
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Configure AWS credentials (deploy role)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          mask-aws-account-id: true
+
+      # The human approval is the environment's reviewer gate above, so the
+      # CLI's interactive "deploy these IAM changes?" prompt is disabled.
+      - name: Deploy
+        run: npx cdk deploy --require-approval never
