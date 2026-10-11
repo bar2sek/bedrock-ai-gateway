@@ -20,6 +20,8 @@ graph LR
   M --> A[Alarm: ServerErrors ≥ 1]
   A -->|ALARM / OK| T[SNS alerts topic<br/>owned by Terraform]
   T --> E[Email]
+  M --> D[Dashboard<br/>BedrockAiGateway]
+  L -->|PutItem per answered request| U[(DynamoDB usage log<br/>per consumer, 90-day TTL)]
 ```
 
 **Why EMF rather than `PutMetricData`:** EMF is a log write, so it needs no extra IAM permission (the permissions boundary already allows logs) and adds no API call or latency to the request.
@@ -35,14 +37,55 @@ Namespace `BedrockAiGateway`, dimension `service=ai-gateway`.
 | `GuardrailInterventions` | 0 or 1 per request | **Sum** = blocked requests; **Average** = block rate. A spike can mean probing |
 | `NoContextAnswers` | retrieval returned nothing | Knowledge Base empty or ingestion failed |
 | `BedrockThrottles` | Bedrock returned `ThrottlingException` (HTTP 429) | Hitting model quotas |
+| `UsageLogFailures` | a usage-log write failed (the request still succeeds) | Usage records going missing |
 | `ServerErrors` | any other failure (HTTP 502) | Real failures. **Lambda's built-in `Errors` stays at 0** because the handler catches every error |
 | `ColdStart` | first request on a new execution environment | Explaining occasional slow requests |
 
 Bad input (HTTP 400) records nothing; API Gateway's `4XXError` metric covers it.
 
+## Dashboard: `BedrockAiGateway`
+
+CloudWatch → Dashboards → `BedrockAiGateway`, defined in the stack, so it's versioned and reviewed like any other code.
+
+| Row | Left | Right |
+|---|---|---|
+| 1 | Requests, 4XX and 5XX (API Gateway) | Latency p50 / p90 / p99 |
+| 2 | Input and output tokens (lower bound, see findings) | Guardrail block rate (0–1) and no-context answers |
+| 3 | Alarm status | Failures: 502s, Bedrock throttles, usage-log write failures |
+
+The dashboard is named explicitly because CloudFormation doesn't generate dashboard names, and the CDK bootstrap's execution policy only allows dashboards named `BedrockAiGateway*`.
+
+## Usage log (DynamoDB)
+
+One item per **answered** request, including blocked and no-context answers. Failed requests are counted in metrics instead.
+
+| Attribute | Example | Notes |
+|---|---|---|
+| `consumer` (partition key) | `gnyfkoxnda` | The API key ID. One key per consumer, so per-consumer queries are a single `Query` |
+| `requestedAt` (sort key) | `2026-10-11T20:41:58.618Z#bd8a…` | ISO time sorts chronologically; the request ID keeps simultaneous requests distinct |
+| `outcome` | `answered` / `blocked` / `no_context` | |
+| `inputTokens`, `outputTokens`, `latencyMs`, `modelId` | `1241`, `33`, `1654` | |
+| `expiresAt` | epoch seconds | DynamoDB TTL deletes the item after 90 days |
+
+- **Write-only.** The function's role has only `dynamodb:PutItem` on this table, and the permissions boundary allows only `PutItem` too. The function can't read, change or delete usage records.
+- **Never fails the request.** A write error is logged ("Usage record write failed") and counted in `UsageLogFailures`.
+- **The table is deleted with the stack** (`RemovalPolicy.DESTROY`): it's a 90-day operational log, not a system of record.
+
+One consumer's usage, newest first:
+
+```bash
+aws dynamodb query --region us-east-2 --table-name <UsageTableName stack output> \
+  --key-condition-expression "consumer = :c" \
+  --expression-attribute-values '{":c":{"S":"<api-key-id>"}}' \
+  --no-scan-index-forward \
+  --query 'Items[].[requestedAt.S,outcome.S,inputTokens.N,outputTokens.N,latencyMs.N]' --output text
+```
+
+**Verification (2026-10-11):** two live requests wrote two `answered` items under the demo key's ID, with token counts matching the API responses and `expiresAt` 90 days out.
+
 ## Troubleshooting workflow: metric → logs
 
-1. **Spot it in metrics.** CloudWatch → Metrics → `BedrockAiGateway`. Is the block rate up, p90 latency up, or `ServerErrors` non-zero?
+1. **Spot it in metrics.** Open the dashboard, or CloudWatch → Metrics → `BedrockAiGateway`. Is the block rate up, p90 latency up, or `ServerErrors` non-zero?
 2. **Find the requests in logs.** CloudWatch → Logs Insights, log group `BedrockAiGateway-ChatFunctionLogs…`:
 
 ```sql
