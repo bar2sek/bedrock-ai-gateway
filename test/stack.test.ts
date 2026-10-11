@@ -26,7 +26,13 @@ test('chat function runs Node.js 24 on Graviton with tracing', () => {
     Runtime: 'nodejs24.x',
     Architectures: ['arm64'],
     TracingConfig: { Mode: 'Active' },
-    Environment: { Variables: Match.objectLike({ KNOWLEDGE_BASE_ID: 'KB123', GUARDRAIL_VERSION: '1' }) },
+    Environment: {
+      Variables: Match.objectLike({
+        KNOWLEDGE_BASE_ID: 'KB123',
+        GUARDRAIL_VERSION: '1',
+        POWERTOOLS_METRICS_NAMESPACE: 'BedrockAiGateway',
+      }),
+    },
   });
 });
 
