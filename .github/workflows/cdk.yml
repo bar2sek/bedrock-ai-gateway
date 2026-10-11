@@ -17,6 +17,11 @@ on:
   push:
     branches: [main]
 
+# Third-party actions are pinned to full commit SHAs (tags can be moved to
+# point at different code); the comment records the release. Dependabot
+# (.github/dependabot.yml) proposes updates as PRs. The runner image is pinned
+# too, so OS upgrades also arrive as reviewed changes.
+
 # Least privilege by default; jobs that need an OIDC token opt in.
 permissions:
   contents: read
@@ -29,16 +34,16 @@ jobs:
   verify:
     # Must stay `verify`: branch protection requires a check with this name.
     name: verify
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       id-token: write # request the OIDC token exchanged for AWS credentials
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
@@ -56,7 +61,7 @@ jobs:
       # On push, `cdk deploy` prints the changes it applies.
       - name: Configure AWS credentials (read-only diff role)
         if: github.event_name == 'pull_request'
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
           role-to-assume: ${{ secrets.AWS_DIFF_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
@@ -90,7 +95,7 @@ jobs:
     name: deploy
     needs: verify
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Required reviewer approval happens here, before any step runs. Only jobs
     # in this environment receive an OIDC subject the deploy role trusts.
     environment: production
@@ -103,10 +108,10 @@ jobs:
       cancel-in-progress: false
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
@@ -115,7 +120,7 @@ jobs:
         run: npm ci
 
       - name: Configure AWS credentials (deploy role)
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
           role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
