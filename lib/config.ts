@@ -17,9 +17,15 @@ export interface GatewayConfig {
   readonly guardrailId: string;
   /** A published, immutable guardrail version (e.g. `1`). Avoid `DRAFT` outside of testing. */
   readonly guardrailVersion: string;
+  /**
+   * Name of the shared SNS alerts topic that alarms notify. Owned by Terraform
+   * (personal-technology bootstrap/aws), so the subscriber email never appears
+   * in this repository or its CloudFormation templates.
+   */
+  readonly alertTopicName: string;
 }
 
-const REQUIRED_KEYS = ['region', 'modelId', 'knowledgeBaseId', 'guardrailId', 'guardrailVersion'] as const;
+const REQUIRED_KEYS = ['region', 'modelId', 'knowledgeBaseId', 'guardrailId', 'guardrailVersion', 'alertTopicName'] as const;
 
 export function loadConfig(node: Node): GatewayConfig {
   const raw: unknown = node.tryGetContext('gateway');

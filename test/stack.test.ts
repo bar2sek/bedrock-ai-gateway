@@ -13,6 +13,7 @@ const stack = new BedrockAiGatewayStack(app, 'TestStack', {
     knowledgeBaseId: 'KB123',
     guardrailId: 'gr-123',
     guardrailVersion: '1',
+    alertTopicName: 'alerts-topic',
   },
 });
 const template = Template.fromStack(stack);
@@ -76,4 +77,16 @@ test('no IAM statement grants wildcard actions', () => {
     ),
   );
   expect(actions.some((action) => action.endsWith('*'))).toBe(false);
+});
+
+test('alarms on any server error and notifies the shared alerts topic', () => {
+  template.hasResourceProperties('AWS::CloudWatch::Alarm', {
+    Namespace: 'BedrockAiGateway',
+    MetricName: 'ServerErrors',
+    Statistic: 'Sum',
+    Threshold: 1,
+    EvaluationPeriods: 1,
+    TreatMissingData: 'notBreaching',
+    AlarmActions: [{ 'Fn::Join': ['', Match.arrayWith([Match.stringLikeRegexp(':alerts-topic$')])] }],
+  });
 });
