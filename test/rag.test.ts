@@ -34,7 +34,7 @@ describe('buildConverseInput', () => {
   test('tags sources and question for the guardrail grounding check', () => {
     expect(input.messages?.[0].content).toEqual([
       { guardContent: { text: { text: `Sources:\n\n${formatSources(sources)}`, qualifiers: ['grounding_source'] } } },
-      { guardContent: { text: { text: 'When are expense reports due?', qualifiers: ['query'] } } },
+      { guardContent: { text: { text: 'When are expense reports due?', qualifiers: ['query', 'guard_content'] } } },
     ]);
   });
 

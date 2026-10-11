@@ -72,7 +72,9 @@ export function buildConverseInput(args: ConverseArgs): ConverseCommandInput {
         role: 'user',
         content: [
           { guardContent: { text: { text: `Sources:\n\n${formatSources(args.sources)}`, qualifiers: ['grounding_source'] } } },
-          { guardContent: { text: { text: args.question, qualifiers: ['query'] } } },
+          // qualifiers is a list, so one block can carry both tags, ["query", "guard_content"]
+          // query alone is only used for the relevance check; guard_content makes the input filters (prompt attack, PII) evaluate it too.
+          { guardContent: { text: { text: args.question, qualifiers: ['query', 'guard_content'] } } },
         ],
       },
     ],
