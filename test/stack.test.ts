@@ -90,3 +90,23 @@ test('alarms on any server error and notifies the shared alerts topic', () => {
     AlarmActions: [{ 'Fn::Join': ['', Match.arrayWith([Match.stringLikeRegexp(':alerts-topic$')])] }],
   });
 });
+
+test('usage log table expires items and the function can only put items', () => {
+  template.hasResourceProperties('AWS::DynamoDB::Table', {
+    KeySchema: [
+      { AttributeName: 'consumer', KeyType: 'HASH' },
+      { AttributeName: 'requestedAt', KeyType: 'RANGE' },
+    ],
+    BillingMode: 'PAY_PER_REQUEST',
+    TimeToLiveSpecification: { AttributeName: 'expiresAt', Enabled: true },
+  });
+  const dynamoActions = Object.values(template.findResources('AWS::IAM::Policy'))
+    .flatMap((policy) => policy.Properties.PolicyDocument.Statement)
+    .flatMap((statement: { Action: string | string[] }) => [statement.Action].flat())
+    .filter((action) => action.startsWith('dynamodb:'));
+  expect(dynamoActions).toEqual(['dynamodb:PutItem']);
+});
+
+test('dashboard is named so the bootstrap execution policy allows it', () => {
+  template.hasResourceProperties('AWS::CloudWatch::Dashboard', { DashboardName: 'BedrockAiGateway' });
+});

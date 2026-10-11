@@ -3,6 +3,8 @@ export interface GatewayEnv {
   readonly knowledgeBaseId: string;
   readonly guardrailId: string;
   readonly guardrailVersion: string;
+  /** DynamoDB table that receives one usage record per answered request. */
+  readonly usageTableName: string;
 }
 
 /** Reads the function's configuration, failing loudly if the stack forgot a variable. */
@@ -12,6 +14,7 @@ export function loadEnv(env: NodeJS.ProcessEnv): GatewayEnv {
     knowledgeBaseId: required(env, 'KNOWLEDGE_BASE_ID'),
     guardrailId: required(env, 'GUARDRAIL_ID'),
     guardrailVersion: required(env, 'GUARDRAIL_VERSION'),
+    usageTableName: required(env, 'USAGE_TABLE_NAME'),
   };
 }
 
