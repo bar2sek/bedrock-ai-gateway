@@ -17,6 +17,9 @@
     ]
   },
   "context": {
+     "@aws-cdk/core:permissionsBoundary": {
+     "name": "policy-aws-cdk-gateway-boundary-prod-001"
+    },
     "gateway": {
       "region": "us-east-2",
       "modelId": "us.amazon.nova-lite-v1:0",
