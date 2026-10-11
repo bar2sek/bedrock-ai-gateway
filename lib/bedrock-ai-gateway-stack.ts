@@ -3,6 +3,7 @@ import * as cdk from 'aws-cdk-lib/core';
 import * as apigw from 'aws-cdk-lib/aws-apigateway';
 import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
 import * as cwActions from 'aws-cdk-lib/aws-cloudwatch-actions';
+import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as nodejs from 'aws-cdk-lib/aws-lambda-nodejs';
@@ -63,6 +64,22 @@ export class BedrockAiGatewayStack extends cdk.Stack {
         target: 'node24',
       },
     });
+
+    // --- Usage log ----------------------------------------------------------
+    // One item per answered request, keyed by API key (one per consumer) and
+    // time, so usage can be queried per consumer. Items expire via TTL.
+    const usageTable = new dynamodb.Table(this, 'UsageLog', {
+      partitionKey: { name: 'consumer', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'requestedAt', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      timeToLiveAttribute: 'expiresAt',
+      // A 90-day operational log, not a system of record.
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+    chatFunction.addEnvironment('USAGE_TABLE_NAME', usageTable.tableName);
+    // Write-only: the function can add records but never read or change them.
+    // The permissions boundary allows exactly this action too.
+    usageTable.grant(chatFunction, 'dynamodb:PutItem');
 
     // --- Bedrock permissions (least privilege) -------------------------------
     for (const statement of modelInvokeStatements(this, config.modelId)) {
@@ -171,6 +188,71 @@ export class BedrockAiGatewayStack extends cdk.Stack {
     // Also notify on recovery, so an alert is never left open-ended.
     serverErrorsAlarm.addOkAction(new cwActions.SnsAction(alertTopic));
 
+    // --- Dashboard -----------------------------------------------------------
+    // One page for "is it healthy?": traffic and errors, latency, cost, safety.
+    // Named explicitly: dashboards get no generated name, and the bootstrap's
+    // execution policy only allows dashboards named BedrockAiGateway*.
+    const appMetric = (metricName: string, statistic: string, label?: string) =>
+      new cloudwatch.Metric({
+        namespace: METRICS_NAMESPACE,
+        metricName,
+        dimensionsMap: { service: 'ai-gateway' },
+        statistic,
+        period: cdk.Duration.minutes(5),
+        label,
+      });
+
+    new cloudwatch.Dashboard(this, 'Dashboard', {
+      dashboardName: 'BedrockAiGateway',
+      defaultInterval: cdk.Duration.hours(24),
+      widgets: [
+        [
+          new cloudwatch.GraphWidget({
+            title: 'Requests and HTTP errors (API Gateway)',
+            left: [api.metricCount(), api.metricClientError(), api.metricServerError()],
+            width: 12,
+          }),
+          new cloudwatch.GraphWidget({
+            title: 'Latency (ms)',
+            left: [
+              appMetric('Latency', cloudwatch.Stats.p(50), 'p50'),
+              appMetric('Latency', cloudwatch.Stats.p(90), 'p90'),
+              appMetric('Latency', cloudwatch.Stats.p(99), 'p99'),
+            ],
+            width: 12,
+          }),
+        ],
+        [
+          new cloudwatch.GraphWidget({
+            title: 'Tokens (lower bound: blocked requests report 0)',
+            left: [
+              appMetric('InputTokens', cloudwatch.Stats.SUM, 'input'),
+              appMetric('OutputTokens', cloudwatch.Stats.SUM, 'output'),
+            ],
+            width: 12,
+          }),
+          new cloudwatch.GraphWidget({
+            title: 'Guardrail block rate and empty retrievals',
+            left: [appMetric('GuardrailInterventions', cloudwatch.Stats.AVERAGE, 'block rate (0-1)')],
+            right: [appMetric('NoContextAnswers', cloudwatch.Stats.SUM, 'no-context answers')],
+            width: 12,
+          }),
+        ],
+        [
+          new cloudwatch.AlarmStatusWidget({ title: 'Alarms', alarms: [serverErrorsAlarm], width: 6 }),
+          new cloudwatch.GraphWidget({
+            title: 'Function failures (Lambda Errors stays 0: the handler catches everything)',
+            left: [
+              appMetric('ServerErrors', cloudwatch.Stats.SUM, '502 server errors'),
+              appMetric('BedrockThrottles', cloudwatch.Stats.SUM, '429 Bedrock throttles'),
+              appMetric('UsageLogFailures', cloudwatch.Stats.SUM, 'usage log write failures'),
+            ],
+            width: 18,
+          }),
+        ],
+      ],
+    });
+
     // --- Outputs -------------------------------------------------------------
     new cdk.CfnOutput(this, 'ChatEndpoint', { value: api.urlForPath('/chat') });
     new cdk.CfnOutput(this, 'DemoApiKeyId', {
@@ -178,5 +260,6 @@ export class BedrockAiGatewayStack extends cdk.Stack {
       description: 'Fetch the key value with: aws apigateway get-api-key --include-value --api-key <id>',
     });
     new cdk.CfnOutput(this, 'ChatFunctionName', { value: chatFunction.functionName });
+    new cdk.CfnOutput(this, 'UsageTableName', { value: usageTable.tableName });
   }
 }

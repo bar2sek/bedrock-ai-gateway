@@ -2,6 +2,7 @@ import { Logger } from '@aws-lambda-powertools/logger';
 import { Metrics, MetricUnit } from '@aws-lambda-powertools/metrics';
 import { BedrockAgentRuntimeClient, RetrieveCommand } from '@aws-sdk/client-bedrock-agent-runtime';
 import { BedrockRuntimeClient, ConverseCommand } from '@aws-sdk/client-bedrock-runtime';
+import { DynamoDBClient, PutItemCommand } from '@aws-sdk/client-dynamodb';
 import type { APIGatewayProxyEvent, APIGatewayProxyResult, Context } from 'aws-lambda';
 import { loadEnv } from './env';
 import { buildConverseInput, NO_CONTEXT_ANSWER, toSources, type Source } from './rag';
@@ -18,6 +19,12 @@ const metrics = new Metrics();
 // invocations reuse the clients and their open connections.
 const agentRuntime = new BedrockAgentRuntimeClient({});
 const bedrock = new BedrockRuntimeClient({});
+const dynamodb = new DynamoDBClient({});
+
+/** Usage records expire (DynamoDB TTL) after this long. */
+const USAGE_RETENTION_SECONDS = 90 * 24 * 60 * 60;
+
+type UsageOutcome = 'answered' | 'blocked' | 'no_context';
 
 export interface ChatResponse {
   readonly answer: string;
@@ -53,7 +60,9 @@ export const handler = async (event: APIGatewayProxyEvent, context: Context): Pr
       logger.info('No sources retrieved', { topK: request.topK });
       metrics.addMetric('NoContextAnswers', MetricUnit.Count, 1);
       metrics.addMetric('Latency', MetricUnit.Milliseconds, Date.now() - startedAt);
-      return json(200, response(NO_CONTEXT_ANSWER, [], false, 0, 0, env.modelId, startedAt));
+      const result = response(NO_CONTEXT_ANSWER, [], false, 0, 0, env.modelId, startedAt);
+      await recordUsage(env.usageTableName, event, context, result, 'no_context');
+      return json(200, result);
     }
 
     // 2. Generate: answer from the sources, with the guardrail screening input and output.
@@ -93,10 +102,17 @@ export const handler = async (event: APIGatewayProxyEvent, context: Context): Pr
 
     // When the guardrail blocks, the answer is its canned message and the
     // sources no longer support it, so they are withheld.
-    return json(
-      200,
-      response(answer, guardrailIntervened ? [] : sources, guardrailIntervened, inputTokens, outputTokens, env.modelId, startedAt),
+    const result = response(
+      answer,
+      guardrailIntervened ? [] : sources,
+      guardrailIntervened,
+      inputTokens,
+      outputTokens,
+      env.modelId,
+      startedAt,
     );
+    await recordUsage(env.usageTableName, event, context, result, guardrailIntervened ? 'blocked' : 'answered');
+    return json(200, result);
   } catch (error) {
     if (error instanceof ValidationError) {
       return json(400, { error: error.message });
@@ -119,6 +135,42 @@ export const handler = async (event: APIGatewayProxyEvent, context: Context): Pr
     }
   }
 };
+
+/**
+ * Writes one usage record per answered request, keyed by the caller's API key
+ * (one key per consumer), so usage and cost can be reported per consumer.
+ * Never fails the request: a write error is logged and counted instead.
+ */
+async function recordUsage(
+  tableName: string,
+  event: APIGatewayProxyEvent,
+  context: Context,
+  result: ChatResponse,
+  outcome: UsageOutcome,
+): Promise<void> {
+  const now = new Date();
+  try {
+    await dynamodb.send(
+      new PutItemCommand({
+        TableName: tableName,
+        Item: {
+          consumer: { S: event.requestContext?.identity?.apiKeyId ?? 'unknown' },
+          // Sorts chronologically; the request ID keeps simultaneous requests distinct.
+          requestedAt: { S: `${now.toISOString()}#${context.awsRequestId}` },
+          outcome: { S: outcome },
+          modelId: { S: result.modelId },
+          inputTokens: { N: String(result.usage.inputTokens) },
+          outputTokens: { N: String(result.usage.outputTokens) },
+          latencyMs: { N: String(result.latencyMs) },
+          expiresAt: { N: String(Math.floor(now.getTime() / 1000) + USAGE_RETENTION_SECONDS) },
+        },
+      }),
+    );
+  } catch (error) {
+    logger.warn('Usage record write failed', { error });
+    metrics.addMetric('UsageLogFailures', MetricUnit.Count, 1);
+  }
+}
 
 function response(
   answer: string,

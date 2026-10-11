@@ -1,5 +1,6 @@
 import { BedrockAgentRuntimeClient, RetrieveCommand } from '@aws-sdk/client-bedrock-agent-runtime';
 import { BedrockRuntimeClient, ConverseCommand, ThrottlingException } from '@aws-sdk/client-bedrock-runtime';
+import { DynamoDBClient, PutItemCommand } from '@aws-sdk/client-dynamodb';
 import type { APIGatewayProxyEvent, Context } from 'aws-lambda';
 import { mockClient } from 'aws-sdk-client-mock';
 import { handler } from '../src/chat/handler';
@@ -9,6 +10,7 @@ import { NO_CONTEXT_ANSWER } from '../src/chat/rag';
 // leaves the test process and no credentials are needed.
 const agentRuntimeMock = mockClient(BedrockAgentRuntimeClient);
 const bedrockMock = mockClient(BedrockRuntimeClient);
+const dynamodbMock = mockClient(DynamoDBClient);
 
 const context = { functionName: 'chat', awsRequestId: 'test-request' } as Context;
 const event = (body: unknown) => ({ body: JSON.stringify(body) }) as APIGatewayProxyEvent;
@@ -18,6 +20,7 @@ beforeAll(() => {
   process.env.KNOWLEDGE_BASE_ID = 'KB123';
   process.env.GUARDRAIL_ID = 'gr-123';
   process.env.GUARDRAIL_VERSION = '1';
+  process.env.USAGE_TABLE_NAME = 'usage-table';
 });
 
 let consoleLog: jest.SpyInstance;
@@ -25,6 +28,8 @@ let consoleLog: jest.SpyInstance;
 beforeEach(() => {
   agentRuntimeMock.reset();
   bedrockMock.reset();
+  dynamodbMock.reset();
+  dynamodbMock.on(PutItemCommand).resolves({});
   consoleLog = jest.spyOn(console, 'log').mockImplementation(() => undefined);
 });
 
@@ -104,6 +109,7 @@ test('returns 400 for invalid input without calling Bedrock', async () => {
 
   expect(result.statusCode).toBe(400);
   expect(agentRuntimeMock.calls()).toHaveLength(0);
+  expect(dynamodbMock.calls()).toHaveLength(0);
   expect(emittedMetrics()).toEqual({});
 });
 
@@ -125,4 +131,48 @@ test('maps other failures to a generic 502 and counts them', async () => {
   expect(result.statusCode).toBe(502);
   expect(JSON.parse(result.body).error).not.toContain('AccessDenied');
   expect(emittedMetrics()).toMatchObject({ ServerErrors: 1 });
+});
+
+describe('usage log', () => {
+  const answered = () => {
+    agentRuntimeMock.on(RetrieveCommand).resolves({ retrievalResults: [{ content: { text: 'Policy text.' } }] });
+    bedrockMock.on(ConverseCommand).resolves({
+      output: { message: { role: 'assistant', content: [{ text: 'Answer [1].' }] } },
+      stopReason: 'end_turn',
+      usage: { inputTokens: 100, outputTokens: 10, totalTokens: 110 },
+      metrics: { latencyMs: 200 },
+    });
+  };
+
+  test('records one item per answered request, keyed by the API key', async () => {
+    answered();
+    const withKey = {
+      ...event({ question: 'q' }),
+      requestContext: { identity: { apiKeyId: 'key-abc' } },
+    } as unknown as APIGatewayProxyEvent;
+
+    await handler(withKey, context);
+
+    const item = dynamodbMock.commandCalls(PutItemCommand)[0].args[0].input;
+    expect(item.TableName).toBe('usage-table');
+    expect(item.Item).toMatchObject({
+      consumer: { S: 'key-abc' },
+      outcome: { S: 'answered' },
+      inputTokens: { N: '100' },
+      outputTokens: { N: '10' },
+    });
+    expect(item.Item?.requestedAt.S).toMatch(/^\d{4}-\d{2}-\d{2}T.*#test-request$/);
+    const expiresAt = Number(item.Item?.expiresAt.N);
+    expect(expiresAt - Date.now() / 1000).toBeGreaterThan(89 * 24 * 3600);
+  });
+
+  test('a failed usage write does not fail the request, but is counted', async () => {
+    answered();
+    dynamodbMock.on(PutItemCommand).rejects(new Error('ProvisionedThroughputExceededException'));
+
+    const result = await handler(event({ question: 'q' }), context);
+
+    expect(result.statusCode).toBe(200);
+    expect(emittedMetrics()).toMatchObject({ UsageLogFailures: 1 });
+  });
 });
