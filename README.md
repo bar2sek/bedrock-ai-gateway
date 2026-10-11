@@ -25,7 +25,7 @@ graph LR
 4. Otherwise it calls Bedrock `Converse` with a system prompt, the numbered sources and the question. The sources and question are tagged for the guardrail (`grounding_source` / `query`). That lets the guardrail block prompt attacks on the way in, and **ungrounded or irrelevant answers** on the way out.
 5. The response returns the answer with inline citations (`[1]`), the sources used, whether the guardrail intervened, and token usage.
 
-For the concepts (embeddings, top-k, temperature, top-p, grounding) see [How it works](docs/how-it-works.md). For a tour of the code see the [CDK & TypeScript primer](docs/cdk-typescript-primer.md).
+For the concepts (embeddings, top-k, temperature, top-p, grounding) see [How it works](docs/how-it-works.md). For a tour of the code see the [CDK & TypeScript primer](docs/cdk-typescript-primer.md). To troubleshoot with metrics, logs and alarms see [Observability](docs/observability.md).
 
 ## Design decisions
 
@@ -140,7 +140,7 @@ Cases worth trying:
 ## Roadmap
 
 - [x] **M1 — Core path:** API Gateway → Lambda → Retrieve + Converse with Guardrail; tests
-- [ ] **M2 — Observability:** CloudWatch metrics (tokens, latency, guardrail interventions), per-consumer usage log in DynamoDB, dashboard and alarms
+- [ ] **M2 — Observability:** ✅ CloudWatch EMF metrics (tokens, latency, guardrail interventions, errors) · ✅ `ServerErrors` alarm with email via a shared SNS topic · ⬜ dashboard · ⬜ per-consumer usage log in DynamoDB. See [Observability](docs/observability.md)
 - [ ] **M3 — Delivery:**
   - [x] GitHub Actions: PR verify + `cdk diff`, gated OIDC deploy
   - [ ] cdk-nag security rules
