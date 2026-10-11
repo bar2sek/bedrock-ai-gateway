@@ -84,7 +84,20 @@ The Guardrail is attached to the `Converse` call (`guardrailConfig` in `rag.ts`)
 | **Hallucination** | Contextual grounding check: scores the answer against the `grounding_source` block and blocks it below the threshold |
 | **Irrelevance** | Relevance check: scores the answer against the `query` block |
 
-The `guardContent` blocks with `qualifiers` are what make the grounding and relevance checks work in `Converse`. Without them, the guardrail has no way of knowing which text is the source and which is the question.
+The `guardContent` blocks with `qualifiers` tell the guardrail what each piece of text is, and **each qualifier enables different checks**:
+
+| Qualifier | Used by | Input filters (prompt attack, PII, content, topics) run on it? |
+|---|---|---|
+| `grounding_source` | Contextual grounding check | No |
+| `query` | Relevance check | **No** |
+| `guard_content` | Input filters | Yes |
+
+The question therefore carries **both** `query` and `guard_content` (`rag.ts`). That way it's scored for relevance *and* screened for attacks and PII before the model sees it.
+
+> [!WARNING] Finding from red-teaming (2026-10-10)
+> The first version tagged the question with `query` only. Attacking the live endpoint showed that a prompt-injection attempt and a question containing a US Social Security number both reached the model with **no input-guardrail intervention**. Calling `ApplyGuardrail` directly confirmed the cause: `query`-tagged text is skipped by the input filters. Defense in depth limited the damage: the system prompt refused the injection, and the output-side guardrail blocked answers on denied topics. But the SSN had already been sent to the model. Adding `guard_content` fixed it, and the fix was verified against the live endpoint. Unit tests with a mocked Bedrock could not have found this; only testing against the real guardrail did.
+>
+> Still open: retrieved chunks are tagged `grounding_source` only, so the input filters don't screen them. That matters for **indirect prompt injection**, where malicious instructions are planted inside a document. The current mitigations are that the corpus changes only through reviewed pull requests, and that the system prompt treats sources as data.
 
 When the guardrail intervenes, `stopReason` is `guardrail_intervened`, the answer is replaced with the guardrail's configured message, and the gateway returns `guardrailIntervened: true` with no sources.
 
@@ -94,8 +107,8 @@ Before any of this, the gateway skips the model entirely when retrieval finds no
 
 These have nothing to do with AI, but they are what make the gateway safe to share between teams:
 
-- **Identity per consumer.** API keys map callers to usage plans.
-- **Rate limits and quotas.** Per-key throttling and a daily quota cap request volume and, with it, model spend.
+- **Identity per consumer.** API keys map callers to usage plans. An API key *identifies* a consumer; it doesn't *authenticate* one. It's a static string, and anyone holding it can use it. For production callers, add IAM (SigV4), a JWT/Cognito authorizer, or a Lambda authorizer, and keep API keys for usage plans only.
+- **Rate limits and quotas.** Per-key throttling and a daily quota cap request volume. API Gateway checks them before body validation, so throttled requests never reach Lambda or Bedrock. These limits are **best effort, not exact**: in testing, a burst of 20 simultaneous requests all got through before throttling kicked in and over-corrected. Treat usage plans as fairness between consumers, not a spending cap. Hard cost controls belong in Lambda reserved concurrency, Bedrock service quotas, AWS Budgets alerts, or a WAF rate rule.
 - **Input validation.** At the edge (JSON Schema) and again in the function.
 - **Least privilege.** The function can call only the configured model, Knowledge Base and Guardrail.
 - **Tracing and structured logs.** X-Ray traces and JSON logs (Powertools Logger) with token counts and guardrail outcomes.
