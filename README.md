@@ -144,7 +144,8 @@ Cases worth trying:
 - [ ] **M3 — Delivery:**
   - [x] GitHub Actions: PR verify + `cdk diff`, gated OIDC deploy
   - [ ] cdk-nag security rules
-  - [ ] Bootstrap as code with a scoped execution policy and a permissions boundary
+  - [x] Bootstrap as code with a scoped execution policy and a permissions boundary (managed in the `personal-technology` repository)
+  - [x] Actions pinned to commit SHAs, kept current by Dependabot
 - [ ] **M4 — Platform contract:** read Knowledge Base and Guardrail IDs from SSM Parameter Store, published by the Terraform side
 - [ ] **Later:** streaming responses, multi-turn sessions, an evaluation set with LLM-as-judge scoring
 
