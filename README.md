@@ -140,7 +140,7 @@ Cases worth trying:
 ## Roadmap
 
 - [x] **M1 — Core path:** API Gateway → Lambda → Retrieve + Converse with Guardrail; tests
-- [ ] **M2 — Observability:** ✅ CloudWatch EMF metrics (tokens, latency, guardrail interventions, errors) · ✅ `ServerErrors` alarm with email via a shared SNS topic · ⬜ dashboard · ⬜ per-consumer usage log in DynamoDB. See [Observability](docs/observability.md)
+- [x] **M2 — Observability:** CloudWatch EMF metrics (tokens, latency, guardrail interventions, errors), `ServerErrors` alarm with email via a shared SNS topic, `BedrockAiGateway` dashboard, per-consumer usage log in DynamoDB (write-only, 90-day TTL). See [Observability](docs/observability.md)
 - [ ] **M3 — Delivery:**
   - [x] GitHub Actions: PR verify + `cdk diff`, gated OIDC deploy
   - [ ] cdk-nag security rules
