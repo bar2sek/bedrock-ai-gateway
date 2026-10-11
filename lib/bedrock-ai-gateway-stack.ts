@@ -1,10 +1,13 @@
 import * as path from 'node:path';
 import * as cdk from 'aws-cdk-lib/core';
 import * as apigw from 'aws-cdk-lib/aws-apigateway';
+import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
+import * as cwActions from 'aws-cdk-lib/aws-cloudwatch-actions';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as nodejs from 'aws-cdk-lib/aws-lambda-nodejs';
 import * as logs from 'aws-cdk-lib/aws-logs';
+import * as sns from 'aws-cdk-lib/aws-sns';
 import { Construct } from 'constructs';
 import { modelInvokeStatements } from './bedrock-permissions';
 import { GatewayConfig } from './config';
@@ -132,6 +135,41 @@ export class BedrockAiGatewayStack extends cdk.Stack {
     usagePlan.addApiStage({ stage: api.deploymentStage });
     const demoKey = api.addApiKey('DemoConsumerKey', { apiKeyName: 'demo-consumer' });
     usagePlan.addApiKey(demoKey);
+
+    // --- Alarms --------------------------------------------------------------
+    // The shared alerts topic is owned by Terraform; this only references it.
+    const alertTopic = sns.Topic.fromTopicArn(
+      this,
+      'AlertTopic',
+      this.formatArn({ service: 'sns', resource: config.alertTopicName }),
+    );
+
+    // The handler catches every error and returns 502, so Lambda's own Errors
+    // metric stays at 0. ServerErrors (EMF, emitted only on that path) is the
+    // signal. No alarmName: CloudFormation generates BedrockAiGateway-..., the
+    // only alarm prefix the bootstrap's execution policy allows.
+    const serverErrorsAlarm = new cloudwatch.Alarm(this, 'ServerErrorsAlarm', {
+      metric: new cloudwatch.Metric({
+        namespace: METRICS_NAMESPACE,
+        metricName: 'ServerErrors',
+        dimensionsMap: { service: 'ai-gateway' },
+        // Each failure records 1, so Sum = number of failures in the period.
+        statistic: cloudwatch.Stats.SUM,
+        period: cdk.Duration.minutes(5),
+      }),
+      // Any failure is worth knowing about, and alert immediately (one period).
+      threshold: 1,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+      evaluationPeriods: 1,
+      // The metric only exists when something failed: no data means healthy.
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      alarmDescription:
+        'The chat function returned 502s: Bedrock or Knowledge Base calls are failing. ' +
+        'Check the function logs for "Chat request failed".',
+    });
+    serverErrorsAlarm.addAlarmAction(new cwActions.SnsAction(alertTopic));
+    // Also notify on recovery, so an alert is never left open-ended.
+    serverErrorsAlarm.addOkAction(new cwActions.SnsAction(alertTopic));
 
     // --- Outputs -------------------------------------------------------------
     new cdk.CfnOutput(this, 'ChatEndpoint', { value: api.urlForPath('/chat') });

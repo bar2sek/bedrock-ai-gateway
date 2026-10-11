@@ -25,7 +25,8 @@
       "modelId": "us.amazon.nova-lite-v1:0",
       "knowledgeBaseId": "LZXH0DKH5P",
       "guardrailId": "9ja8awiz4w68",
-      "guardrailVersion": "1"
+      "guardrailVersion": "1",
+      "alertTopicName": "sns-aws-alerts-prod-use2-001"
     },
     "@aws-cdk-containers/ecs-service-extensions:enableDefaultLogDriver": true,
     "@aws-cdk/aws-apigateway:authorizerChangeDeploymentLogicalId": true,
