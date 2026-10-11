@@ -1,0 +1,18 @@
+# Keeps the SHA-pinned GitHub Actions in .github/workflows up to date.
+# Dependabot updates the SHA and the version comment together, as a PR that
+# runs the normal `verify` check.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    # Supply-chain cooldown: only propose releases at least a week old, so a
+    # compromised release has time to be caught and pulled first.
+    cooldown:
+      default-days: 7
+    groups:
+      actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: ci
