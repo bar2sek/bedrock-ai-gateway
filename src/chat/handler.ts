@@ -1,4 +1,5 @@
 import { Logger } from '@aws-lambda-powertools/logger';
+import { Metrics, MetricUnit } from '@aws-lambda-powertools/metrics';
 import { BedrockAgentRuntimeClient, RetrieveCommand } from '@aws-sdk/client-bedrock-agent-runtime';
 import { BedrockRuntimeClient, ConverseCommand } from '@aws-sdk/client-bedrock-runtime';
 import type { APIGatewayProxyEvent, APIGatewayProxyResult, Context } from 'aws-lambda';
@@ -7,6 +8,11 @@ import { buildConverseInput, NO_CONTEXT_ANSWER, toSources, type Source } from '.
 import { parseChatRequest, ValidationError } from './request';
 
 const logger = new Logger();
+// Namespace and service come from POWERTOOLS_METRICS_NAMESPACE and
+// POWERTOOLS_SERVICE_NAME (set by the stack). Metrics are written as Embedded
+// Metric Format (EMF) log lines; CloudWatch extracts them from the log group,
+// so publishing needs no extra API call and no extra IAM permission.
+const metrics = new Metrics();
 
 // Created once per execution environment, outside the handler, so warm
 // invocations reuse the clients and their open connections.
@@ -24,6 +30,8 @@ export interface ChatResponse {
 
 export const handler = async (event: APIGatewayProxyEvent, context: Context): Promise<APIGatewayProxyResult> => {
   logger.addContext(context);
+  // Emitted once per execution environment: shows how often users hit a cold start.
+  metrics.captureColdStartMetric();
   const startedAt = Date.now();
 
   try {
@@ -43,6 +51,8 @@ export const handler = async (event: APIGatewayProxyEvent, context: Context): Pr
     // Nothing to ground on: answer directly instead of letting the model guess.
     if (sources.length === 0) {
       logger.info('No sources retrieved', { topK: request.topK });
+      metrics.addMetric('NoContextAnswers', MetricUnit.Count, 1);
+      metrics.addMetric('Latency', MetricUnit.Milliseconds, Date.now() - startedAt);
       return json(200, response(NO_CONTEXT_ANSWER, [], false, 0, 0, env.modelId, startedAt));
     }
 
@@ -66,6 +76,12 @@ export const handler = async (event: APIGatewayProxyEvent, context: Context): Pr
     const inputTokens = output.usage?.inputTokens ?? 0;
     const outputTokens = output.usage?.outputTokens ?? 0;
 
+    metrics.addMetric('InputTokens', MetricUnit.Count, inputTokens);
+    metrics.addMetric('OutputTokens', MetricUnit.Count, outputTokens);
+    // 0 or 1 per request, so Sum is the count and Average is the intervention rate.
+    metrics.addMetric('GuardrailInterventions', MetricUnit.Count, guardrailIntervened ? 1 : 0);
+    metrics.addMetric('Latency', MetricUnit.Milliseconds, Date.now() - startedAt);
+
     logger.info('Chat completed', {
       topK: request.topK,
       sourceCount: sources.length,
@@ -87,11 +103,20 @@ export const handler = async (event: APIGatewayProxyEvent, context: Context): Pr
     }
     if (error instanceof Error && error.name === 'ThrottlingException') {
       logger.warn('Bedrock throttled the request', { error });
+      metrics.addMetric('BedrockThrottles', MetricUnit.Count, 1);
       return json(429, { error: 'The model is busy. Please retry shortly.' });
     }
     // Log the details, return a generic message: internal errors can leak ARNs or account IDs.
     logger.error('Chat request failed', { error });
+    // The handler catches every error, so Lambda's own Errors metric stays at 0.
+    // This metric (and API Gateway's 5XXError) is what reveals failures.
+    metrics.addMetric('ServerErrors', MetricUnit.Count, 1);
     return json(502, { error: 'The assistant is unavailable. Please try again later.' });
+  } finally {
+    // Validation failures (400) record no metrics; API Gateway's 4XXError covers them.
+    if (metrics.hasStoredMetrics()) {
+      metrics.publishStoredMetrics();
+    }
   }
 };
 

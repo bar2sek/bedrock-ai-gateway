@@ -9,6 +9,9 @@ import { Construct } from 'constructs';
 import { modelInvokeStatements } from './bedrock-permissions';
 import { GatewayConfig } from './config';
 
+/** CloudWatch namespace for the chat function's custom (EMF) metrics. */
+export const METRICS_NAMESPACE = 'BedrockAiGateway';
+
 export interface BedrockAiGatewayStackProps extends cdk.StackProps {
   readonly config: GatewayConfig;
 }
@@ -47,6 +50,7 @@ export class BedrockAiGatewayStack extends cdk.Stack {
         GUARDRAIL_ID: config.guardrailId,
         GUARDRAIL_VERSION: config.guardrailVersion,
         POWERTOOLS_SERVICE_NAME: 'ai-gateway',
+        POWERTOOLS_METRICS_NAMESPACE: METRICS_NAMESPACE,
         POWERTOOLS_LOG_LEVEL: 'INFO',
         NODE_OPTIONS: '--enable-source-maps',
       },
