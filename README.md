@@ -1,5 +1,8 @@
 # Bedrock AI Gateway
 
+> [!NOTE]
+> **Archived (November 2026).** This gateway was deployed to AWS, tested end to end, then torn down to keep the account clean. The code, tests and delivery pipeline are complete and kept as a reference. The endpoint and the Knowledge Base and Guardrail it used no longer exist, so the commands under [Try it](#try-it) won't work against a live deployment.
+
 A small, governed AI gateway on AWS. Downstream clients call one HTTP API. The gateway does **retrieval-augmented generation (RAG)** over a company-handbook knowledge base with **Amazon Bedrock**, screens input and output with **Bedrock Guardrails**, and enforces per-consumer identity and rate limits at the edge.
 
 Built with **AWS CDK in TypeScript**, Lambda on Node.js 24 (Graviton), and tested with Jest.
@@ -156,3 +159,5 @@ npx cdk destroy
 ```
 
 This leaves the Knowledge Base and Guardrail untouched. They belong to the Terraform stack.
+
+**How it was actually retired (November 2026):** the stack was deleted with `aws cloudformation delete-stack` (the same execution role CDK deploys with), the Knowledge Base and Guardrail were destroyed through the Terraform pipeline, and the CDK bootstrap and pipeline roles were removed from the account afterwards.
